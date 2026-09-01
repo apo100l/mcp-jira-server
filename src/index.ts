@@ -12,17 +12,19 @@ import { JiraClient, CreateIssueInput, UpdateIssueInput } from './jira-client.js
 // Environment variables
 const JIRA_BASE_URL = process.env.JIRA_BASE_URL;
 const JIRA_PAT = process.env.JIRA_PAT;
+const JIRA_COOKIE = process.env.JIRA_COOKIE;
 const JIRA_USER_AGENT = process.env.JIRA_USER_AGENT;
 
 // Function to check if environment variables are configured
 function checkEnvironmentConfig(): { isConfigured: boolean; error?: string } {
   const JIRA_BASE_URL = process.env.JIRA_BASE_URL;
   const JIRA_PAT = process.env.JIRA_PAT;
+  const JIRA_COOKIE = process.env.JIRA_COOKIE;
   
-  if (!JIRA_BASE_URL || !JIRA_PAT) {
+  if (!JIRA_BASE_URL || (!JIRA_PAT && !JIRA_COOKIE)) {
     return {
       isConfigured: false,
-      error: 'JIRA_BASE_URL and JIRA_PAT environment variables are required. Please configure them before using Jira functionality.'
+      error: 'JIRA_BASE_URL and either JIRA_COOKIE or JIRA_PAT are required. Please configure them before using Jira functionality.'
     };
   }
   return { isConfigured: true };
@@ -39,12 +41,14 @@ function getJiraClient(): JiraClient {
   
   if (!jiraClient) {
     const JIRA_BASE_URL = process.env.JIRA_BASE_URL!;
-    const JIRA_PAT = process.env.JIRA_PAT!;
+    const JIRA_PAT = process.env.JIRA_PAT;
+    const JIRA_COOKIE = process.env.JIRA_COOKIE;
     const JIRA_USER_AGENT = process.env.JIRA_USER_AGENT;
     
     jiraClient = new JiraClient({
       baseUrl: JIRA_BASE_URL,
       personalAccessToken: JIRA_PAT,
+      sessionCookie: JIRA_COOKIE,
       userAgent: JIRA_USER_AGENT,
     });
   }
@@ -517,7 +521,7 @@ async function main() {
   if (config.isConfigured) {
     console.error('Jira MCP Server running on stdio (configured)');
   } else {
-    console.error('Jira MCP Server running on stdio (not configured - JIRA_BASE_URL and JIRA_PAT required)');
+    console.error('Jira MCP Server running on stdio (not configured - JIRA_BASE_URL and either JIRA_COOKIE or JIRA_PAT required)');
   }
 }
 

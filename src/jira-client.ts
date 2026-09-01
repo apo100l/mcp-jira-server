@@ -2,7 +2,8 @@ import axios, { AxiosInstance } from 'axios';
 
 export interface JiraConfig {
   baseUrl: string;
-  personalAccessToken: string;
+  personalAccessToken?: string;
+  sessionCookie?: string;
   userAgent?: string;
 }
 
@@ -87,10 +88,18 @@ export class JiraClient {
     this.baseUrl = config.baseUrl;
     
     const headers: Record<string, string> = {
-      'Authorization': `Bearer ${config.personalAccessToken}`,
       'Content-Type': 'application/json',
-      'Accept': 'application/json'
+      'Accept': 'application/json',
+      'X-Atlassian-Token': 'no-check'
     };
+
+    if (config.sessionCookie) {
+      headers['Cookie'] = config.sessionCookie;
+    } else if (config.personalAccessToken) {
+      headers['Authorization'] = `Bearer ${config.personalAccessToken}`;
+    } else {
+      throw new Error('Either sessionCookie or personalAccessToken is required');
+    }
     
     if (config.userAgent) {
       headers['User-Agent'] = config.userAgent;

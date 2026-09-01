@@ -1,7 +1,7 @@
 {
   "name": "mcp-jira-server",
-  "version": "1.0.3",
-  "description": "MCP server for self-hosted Jira instance with Personal Access Token authentication",
+  "version": "1.1.0",
+  "description": "MCP server for self-hosted Jira with PAT and browser cookie authentication",
   "type": "module",
   "main": "build/index.js",
   "bin": {
@@ -25,11 +25,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/edrich13/mcp-jira-server.git"
+    "url": "git+ssh://git@github.com/apo100l/mcp-jira-server.git"
   },
-  "homepage": "https://github.com/edrich13/mcp-jira-server#readme",
+  "homepage": "https://github.com/apo100l/mcp-jira-server#readme",
   "bugs": {
-    "url": "https://github.com/edrich13/mcp-jira-server/issues"
+    "url": "https://github.com/apo100l/mcp-jira-server/issues"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
