@@ -2,6 +2,7 @@
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { packageVersion } from './version.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -304,7 +305,7 @@ const tools: Tool[] = [
 const server = new Server(
   {
     name: 'mcp-jira-server',
-    version: '1.0.0',
+    version: packageVersion,
   },
   {
     capabilities: {

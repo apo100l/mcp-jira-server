@@ -27,6 +27,22 @@ MCP-сервер для работы с self-hosted Jira через Model Contex
 
 ## Установка
 
+Из npm:
+
+```bash
+npm install --global @apo100l/mcp-jira-server
+```
+
+Либо запуск без глобальной установки:
+
+```bash
+npx --yes @apo100l/mcp-jira-server
+```
+
+Имя без области `mcp-jira-server` в npm принадлежит исходному проекту, поэтому эта версия публикуется как `@apo100l/mcp-jira-server`.
+
+Из исходников:
+
 ```bash
 git clone git@github.com:apo100l/mcp-jira-server.git
 cd mcp-jira-server
@@ -50,6 +66,21 @@ npm run build
 ## Настройка Codex
 
 Добавьте сервер в `~/.codex/config.toml`:
+
+При установке из npm:
+
+```toml
+[mcp_servers.jira]
+enabled = true
+command = "npx"
+args = ["--yes", "@apo100l/mcp-jira-server"]
+
+[mcp_servers.jira.env]
+JIRA_BASE_URL = "https://jira.example.com"
+JIRA_PAT = "your-personal-access-token"
+```
+
+При запуске из исходников:
 
 ```toml
 [mcp_servers.jira]
@@ -137,6 +168,21 @@ Cookie является полноценным секретом доступа. 
 npm run build
 npm run dev
 ```
+
+## Версионирование и публикация
+
+Проект использует Semantic Versioning: `patch` для исправлений, `minor` для обратно совместимых возможностей и `major` для несовместимых изменений.
+
+Обновите `CHANGELOG.md`, затем создайте новую версию и тег одной из команд:
+
+```bash
+npm run release:patch
+# npm run release:minor
+# npm run release:major
+git push origin main --follow-tags
+```
+
+Тег `vX.Y.Z` запускает GitHub Actions, который проверяет проект и публикует пакет в npm. Для автоматического выпуска добавьте секрет репозитория `NPM_TOKEN`, ограниченный пакетом `@apo100l/mcp-jira-server` и правом публикации.
 
 Не добавляйте секреты в исходники. Для локальной разработки передавайте их только через переменные окружения или конфигурацию MCP-клиента.
 

@@ -1,5 +1,5 @@
 {
-  "name": "mcp-jira-server",
+  "name": "@apo100l/mcp-jira-server",
   "version": "1.1.0",
   "description": "MCP server for self-hosted Jira with PAT and browser cookie authentication",
   "type": "module",
@@ -9,9 +9,15 @@
   },
   "scripts": {
     "build": "tsc",
+    "check": "tsc --noEmit",
+    "test": "npm run check && npm run build",
     "watch": "tsc --watch",
     "prepare": "npm run build",
-    "dev": "tsx src/index.ts"
+    "prepublishOnly": "npm test",
+    "dev": "tsx src/index.ts",
+    "release:patch": "npm version patch -m \"chore(release): v%s\"",
+    "release:minor": "npm version minor -m \"chore(release): v%s\"",
+    "release:major": "npm version major -m \"chore(release): v%s\""
   },
   "keywords": [
     "mcp",
@@ -32,8 +38,8 @@
     "url": "https://github.com/apo100l/mcp-jira-server/issues"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.4",
-    "axios": "^1.7.9"
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "axios": "^1.20.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
@@ -44,5 +50,10 @@
     "build/**/*",
     "README.md",
     "LICENSE"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "registry": "https://registry.npmjs.org/"
+  }
 }
