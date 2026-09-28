@@ -4,6 +4,9 @@ export interface JiraConfig {
   baseUrl: string;
   personalAccessToken?: string;
   sessionCookie?: string;
+  cookieProvider?: {
+    getCookieHeader(): Promise<string>;
+  };
   userAgent?: string;
 }
 
@@ -93,16 +96,27 @@ export class JiraClient {
       'X-Atlassian-Token': 'no-check'
     };
 
-    if (config.sessionCookie) {
+    if (config.userAgent) {
+      headers['User-Agent'] = config.userAgent;
+    }
+
+    if (config.cookieProvider) {
+      this.client = axios.create({
+        baseURL: `${config.baseUrl}/rest/api/2`,
+        headers
+      });
+      this.client.interceptors.request.use(async (request) => {
+        const cookie = await config.cookieProvider!.getCookieHeader();
+        request.headers.set('Cookie', cookie);
+        return request;
+      });
+      return;
+    } else if (config.sessionCookie) {
       headers['Cookie'] = config.sessionCookie;
     } else if (config.personalAccessToken) {
       headers['Authorization'] = `Bearer ${config.personalAccessToken}`;
     } else {
-      throw new Error('Either sessionCookie or personalAccessToken is required');
-    }
-    
-    if (config.userAgent) {
-      headers['User-Agent'] = config.userAgent;
+      throw new Error('A browser cookie provider, sessionCookie, or personalAccessToken is required');
     }
     
     this.client = axios.create({

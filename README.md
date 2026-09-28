@@ -1,11 +1,12 @@
 # MCP Jira Server
 
-MCP-сервер для работы с self-hosted Jira через Model Context Protocol. Поддерживает два способа авторизации:
+MCP-сервер для работы с self-hosted Jira через Model Context Protocol. Поддерживает три способа авторизации:
 
 - Personal Access Token (`JIRA_PAT`);
-- браузерная Jira/SSO-сессия (`JIRA_COOKIE`).
+- вручную переданный cookie (`JIRA_COOKIE`);
+- автоматически поддерживаемая Jira/SSO-сессия в отдельном Chrome-профиле (`JIRA_AUTH_MODE=browser`).
 
-Авторизация через cookie полезна для корпоративных Jira, где создание PAT отключено, а доступ выполняется через SSO. Если одновременно заданы `JIRA_COOKIE` и `JIRA_PAT`, сервер использует cookie.
+Браузерный режим рекомендуется для корпоративных Jira, где создание PAT отключено, а доступ выполняется через SSO. Пользователь входит один раз в отдельном окне Chrome; профиль сохраняет и обновляет cookies между запусками MCP.
 
 ## Возможности
 
@@ -23,7 +24,7 @@ MCP-сервер для работы с self-hosted Jira через Model Contex
 
 - Node.js 18 или новее;
 - доступ к self-hosted Jira;
-- PAT либо активная браузерная Jira-сессия.
+- PAT, cookie либо возможность войти в Jira через Chrome.
 
 ## Установка
 
@@ -57,6 +58,11 @@ npm run build
 | Переменная | Обязательность | Описание |
 | --- | --- | --- |
 | `JIRA_BASE_URL` | Да | Базовый URL Jira без `/rest/api/2`, например `https://jira.example.com` |
+| `JIRA_AUTH_MODE` | Нет | Установите `browser`, чтобы автоматически получать cookies из постоянного Chrome-профиля |
+| `JIRA_BROWSER_PROFILE` | Нет | Каталог отдельного Chrome-профиля; по умолчанию `~/.mcp-jira-server/chrome-profile` |
+| `JIRA_BROWSER_CHANNEL` | Нет | Канал Playwright; по умолчанию `chrome` |
+| `JIRA_BROWSER_HEADLESS` | Нет | `true` для фонового Chrome после первоначального входа; по умолчанию `false` |
+| `JIRA_BROWSER_VALIDATION_TTL_SECONDS` | Нет | Период повторной проверки Jira-сессии; по умолчанию 60 секунд |
 | `JIRA_COOKIE` | Один из способов авторизации | Полное значение HTTP-заголовка `Cookie` из авторизованной браузерной сессии |
 | `JIRA_PAT` | Один из способов авторизации | Personal Access Token; используется, только если `JIRA_COOKIE` не задан |
 | `JIRA_USER_AGENT` | Нет | Пользовательский `User-Agent`, если reverse proxy или SSO фильтрует запросы |
@@ -67,20 +73,24 @@ npm run build
 
 Добавьте сервер в `~/.codex/config.toml`:
 
-При установке из npm:
+Рекомендуемая настройка с автоматической браузерной сессией:
 
 ```toml
 [mcp_servers.jira]
 enabled = true
-command = "npx"
-args = ["--yes", "@apo100l/mcp-jira-server"]
+command = "node"
+args = ["/absolute/path/to/mcp-jira-server/build/index.js"]
 
 [mcp_servers.jira.env]
 JIRA_BASE_URL = "https://jira.example.com"
-JIRA_PAT = "your-personal-access-token"
+JIRA_AUTH_MODE = "browser"
+JIRA_BROWSER_PROFILE = "/absolute/private/path/jira-chrome-profile"
+JIRA_BROWSER_CHANNEL = "chrome"
 ```
 
-При запуске из исходников:
+При первом обращении к Jira MCP откроет отдельное окно Chrome. Войдите в Jira через SSO и повторите запрос. Cookie сохранится в `JIRA_BROWSER_PROFILE`; копировать его в `config.toml` не требуется.
+
+Настройка с cookie, переданным вручную:
 
 ```toml
 [mcp_servers.jira]
@@ -94,7 +104,7 @@ JIRA_COOKIE = 'JSESSIONID=...; another_cookie=...'
 JIRA_USER_AGENT = "Mozilla/5.0"
 ```
 
-Для PAT вместо `JIRA_COOKIE` укажите:
+Для PAT укажите:
 
 ```toml
 JIRA_PAT = "your-personal-access-token"
@@ -102,7 +112,20 @@ JIRA_PAT = "your-personal-access-token"
 
 После изменения конфигурации полностью перезапустите Codex, чтобы MCP-процесс получил новые переменные окружения.
 
-## Как получить cookie браузерной сессии
+## Автоматическая браузерная авторизация
+
+Доступны два служебных инструмента:
+
+- `jira_browser_login` — открывает Jira в отдельном постоянном Chrome-профиле;
+- `jira_browser_auth_status` — проверяет, авторизован ли профиль.
+
+Перед каждым Jira-запросом сервер получает актуальные cookies из профиля. Проверка `/rest/api/2/myself` выполняется не чаще заданного TTL. Если SSO-сессия истекла, сервер открывает Jira и просит повторно войти.
+
+Не указывайте каталог основного профиля Chrome. Современный Chrome ограничивает автоматизацию основного профиля; отдельный каталог также уменьшает последствия компрометации MCP-процесса.
+
+Папка профиля содержит секреты сессии. Не храните её внутри Git-репозитория и ограничьте к ней доступ на уровне ОС.
+
+## Как получить cookie вручную
 
 1. Авторизуйтесь в Jira в браузере.
 2. Откройте Developer Tools → **Network**.
@@ -123,8 +146,9 @@ Cookie является полноценным секретом доступа. 
       "args": ["/absolute/path/to/mcp-jira-server/build/index.js"],
       "env": {
         "JIRA_BASE_URL": "https://jira.example.com",
-        "JIRA_COOKIE": "JSESSIONID=...; another_cookie=...",
-        "JIRA_USER_AGENT": "Mozilla/5.0"
+        "JIRA_AUTH_MODE": "browser",
+        "JIRA_BROWSER_PROFILE": "/absolute/private/path/jira-chrome-profile",
+        "JIRA_BROWSER_CHANNEL": "chrome"
       }
     }
   }
@@ -135,6 +159,8 @@ Cookie является полноценным секретом доступа. 
 
 | Инструмент | Назначение |
 | --- | --- |
+| `jira_browser_login` | Открытие постоянного Chrome-профиля для входа через SSO |
+| `jira_browser_auth_status` | Проверка браузерной Jira-сессии |
 | `jira_get_current_user` | Текущий авторизованный пользователь |
 | `jira_get_issue` | Получение задачи по ключу |
 | `jira_search_issues` | Поиск задач через JQL |
