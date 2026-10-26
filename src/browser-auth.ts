@@ -1,389 +1,180 @@
-import { spawn, ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:net';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
-import axios from 'axios';
+import { join } from 'node:path';
+import { chromium, BrowserContext, Page } from 'playwright-core';
 
-export interface BrowserAuthOptions {
+export interface BrowserAuthConfig {
   baseUrl: string;
-  browserProfile: string;
-  browserChannel?: string;
+  profileDir?: string;
+  channel?: string;
+  headless?: boolean;
   userAgent?: string;
-  loginTimeoutMs?: number;
+  validationTtlMs?: number;
 }
 
-interface CachedSession {
-  cookieHeader: string;
-  userAgent?: string;
-  updatedAt: string;
+export interface BrowserAuthStatus {
+  authenticated: boolean;
+  browserOpened: boolean;
+  profileDir: string;
+  statusCode?: number;
+  message: string;
 }
 
-function expandHome(filepath: string): string {
-  if (filepath.startsWith('~/') || filepath === '~') {
-    return join(homedir(), filepath.slice(1));
+export class BrowserAuthenticationRequiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BrowserAuthenticationRequiredError';
   }
-  return resolve(filepath);
 }
 
-function resolveBrowserExecutable(channel: string = 'chrome'): string {
-  if (channel.startsWith('/') && existsSync(channel)) {
-    return channel;
-  }
+export class BrowserAuthProvider {
+  readonly profileDir: string;
 
-  const normalized = channel.toLowerCase();
-  const candidates: Record<string, string[]> = {
-    chrome: [
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-      '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
-      '/Applications/Chromium.app/Contents/MacOS/Chromium',
-    ],
-    chromium: [
-      '/Applications/Chromium.app/Contents/MacOS/Chromium',
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    ],
-    brave: [
-      '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
-    ],
-    edge: [
-      '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-    ],
-  };
+  private readonly baseUrl: string;
+  private readonly channel: string;
+  private readonly headless: boolean;
+  private readonly userAgent?: string;
+  private readonly validationTtlMs: number;
+  private contextPromise: Promise<BrowserContext> | null = null;
+  private lastValidatedAt = 0;
 
-  const list = candidates[normalized] || candidates.chrome;
-  for (const candidate of list) {
-    if (existsSync(candidate)) {
-      return candidate;
-    }
+  constructor(config: BrowserAuthConfig) {
+    this.baseUrl = config.baseUrl.replace(/\/$/, '');
+    this.profileDir = config.profileDir || join(homedir(), '.mcp-jira-server', 'chrome-profile');
+    this.channel = config.channel || 'chrome';
+    this.headless = config.headless ?? false;
+    this.userAgent = config.userAgent;
+    this.validationTtlMs = config.validationTtlMs ?? 60_000;
   }
 
-  throw new Error(
-    `Could not find browser executable for channel "${channel}". Checked: ${list.join(', ')}`
-  );
-}
-
-async function getFreePort(): Promise<number> {
-  return new Promise((resolvePort, reject) => {
-    const srv = createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const addr = srv.address();
-      if (addr && typeof addr === 'object') {
-        const port = addr.port;
-        srv.close(() => resolvePort(port));
-      } else {
-        srv.close(() => reject(new Error('Could not allocate free local port')));
-      }
-    });
-    srv.on('error', reject);
-  });
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-async function fetchDebuggerCookies(
-  port: number,
-  targetUrl: string
-): Promise<{ cookieHeader: string; userAgent?: string }> {
-  const versionResp = await axios.get(`http://127.0.0.1:${port}/json/version`, {
-    timeout: 2000,
-  });
-  const wsUrl: string | undefined = versionResp.data?.webSocketDebuggerUrl;
-  const detectedUa: string | undefined = versionResp.data?.['User-Agent'];
-
-  if (!wsUrl) {
-    throw new Error('No webSocketDebuggerUrl returned from Chrome DevTools endpoint');
-  }
-
-  return new Promise((resolveResult, rejectResult) => {
-    const ws = new WebSocket(wsUrl);
-    const timeout = setTimeout(() => {
-      try {
-        ws.close();
-      } catch {}
-      rejectResult(new Error('Timed out waiting for CDP Storage.getCookies'));
-    }, 5000);
-
-    ws.addEventListener('open', () => {
-      ws.send(
-        JSON.stringify({
-          id: 1,
-          method: 'Storage.getCookies',
-          params: {},
-        })
+  async getCookieHeader(): Promise<string> {
+    const status = await this.getStatus(true);
+    if (!status.authenticated) {
+      await this.openLogin();
+      throw new BrowserAuthenticationRequiredError(
+        'Jira browser session is not authenticated. Sign in in the opened browser window, then retry the Jira request.'
       );
-    });
-
-    ws.addEventListener('message', (event) => {
-      try {
-        const data = JSON.parse(String(event.data));
-        if (data.id === 1) {
-          clearTimeout(timeout);
-          try {
-            ws.close();
-          } catch {}
-
-          const cookies: Array<{
-            name: string;
-            value: string;
-            domain: string;
-            path: string;
-            expires?: number;
-          }> = data.result?.cookies || [];
-
-          const parsedTarget = new URL(targetUrl);
-          const hostname = parsedTarget.hostname.toLowerCase();
-          const baseDomainParts = hostname.split('.');
-          const rootDomain =
-            baseDomainParts.length >= 2
-              ? baseDomainParts.slice(-2).join('.')
-              : hostname;
-
-          const nowSec = Date.now() / 1000;
-          const matching = cookies.filter((c) => {
-            if (!c.name || !c.domain) return false;
-            if (c.expires && c.expires > 0 && c.expires < nowSec) return false;
-            const cleanDomain = c.domain.replace(/^\./, '').toLowerCase();
-            return (
-              hostname === cleanDomain ||
-              hostname.endsWith(`.${cleanDomain}`) ||
-              cleanDomain.endsWith(rootDomain)
-            );
-          });
-
-          const cookieMap = new Map<string, string>();
-          for (const c of matching) {
-            cookieMap.set(c.name, `${c.name}=${c.value}`);
-          }
-
-          const cookieHeader = Array.from(cookieMap.values()).join('; ');
-          resolveResult({
-            cookieHeader,
-            userAgent: detectedUa?.replace('HeadlessChrome/', 'Chrome/'),
-          });
-        }
-      } catch (err) {
-        clearTimeout(timeout);
-        try {
-          ws.close();
-        } catch {}
-        rejectResult(err);
-      }
-    });
-
-    ws.addEventListener('error', (err) => {
-      clearTimeout(timeout);
-      rejectResult(new Error(`CDP WebSocket error: ${String(err)}`));
-    });
-  });
-}
-
-export class BrowserSessionManager {
-  private baseUrl: string;
-  private profileDir: string;
-  private browserChannel: string;
-  private configuredUserAgent?: string;
-  private loginTimeoutMs: number;
-  private cacheFilePath: string;
-  private cachedCookie?: string;
-  private cachedUserAgent?: string;
-
-  constructor(options: BrowserAuthOptions) {
-    this.baseUrl = options.baseUrl.replace(/\/+$/, '');
-    this.profileDir = expandHome(options.browserProfile);
-    this.browserChannel = options.browserChannel || 'chrome';
-    this.configuredUserAgent = options.userAgent;
-    this.loginTimeoutMs = options.loginTimeoutMs ?? 180_000;
-    this.cacheFilePath = join(this.profileDir, '.jira-mcp-session.json');
-    this.loadCachedSession();
-  }
-
-  private loadCachedSession(): void {
-    try {
-      if (existsSync(this.cacheFilePath)) {
-        const raw = JSON.parse(readFileSync(this.cacheFilePath, 'utf8')) as CachedSession;
-        if (raw.cookieHeader) {
-          this.cachedCookie = raw.cookieHeader;
-          this.cachedUserAgent = raw.userAgent;
-        }
-      }
-    } catch {
-      // Ignore invalid cache
-    }
-  }
-
-  private saveCachedSession(cookieHeader: string, userAgent?: string): void {
-    try {
-      mkdirSync(this.profileDir, { recursive: true });
-      const payload: CachedSession = {
-        cookieHeader,
-        userAgent,
-        updatedAt: new Date().toISOString(),
-      };
-      writeFileSync(this.cacheFilePath, JSON.stringify(payload, null, 2), 'utf8');
-    } catch {
-      // Ignore cache write errors
-    }
-  }
-
-  getEffectiveUserAgent(): string | undefined {
-    return this.configuredUserAgent || this.cachedUserAgent;
-  }
-
-  async verifyCookie(cookieHeader: string, userAgent?: string): Promise<boolean> {
-    if (!cookieHeader || !cookieHeader.trim()) {
-      return false;
     }
 
-    try {
-      const headers: Record<string, string> = {
-        Accept: 'application/json',
-        Cookie: cookieHeader,
-        'X-Atlassian-Token': 'no-check',
-      };
-      const ua = userAgent || this.getEffectiveUserAgent();
-      if (ua) {
-        headers['User-Agent'] = ua;
-      }
-
-      const response = await axios.get(`${this.baseUrl}/rest/api/2/myself`, {
-        headers,
-        timeout: 8000,
-        maxRedirects: 0,
-        validateStatus: (status) => status >= 200 && status < 400,
-      });
-
-      const contentType = String(response.headers['content-type'] || '').toLowerCase();
-      if (!contentType.includes('application/json')) {
-        return false;
-      }
-
-      return Boolean(
-        response.data &&
-          typeof response.data === 'object' &&
-          (response.data.name || response.data.key || response.data.accountId || response.data.emailAddress)
+    const context = await this.getContext();
+    const cookies = await context.cookies(this.baseUrl);
+    if (cookies.length === 0) {
+      throw new BrowserAuthenticationRequiredError(
+        'No Jira cookies were found in the persistent browser profile. Run jira_browser_login and sign in.'
       );
-    } catch {
-      return false;
     }
+
+    return cookies.map(({ name, value }) => `${name}=${value}`).join('; ');
   }
 
-  async getValidCookie(forceInteractive: boolean = false): Promise<{
-    cookieHeader: string;
-    userAgent?: string;
-  }> {
-    if (!forceInteractive && this.cachedCookie) {
-      const ok = await this.verifyCookie(this.cachedCookie, this.cachedUserAgent);
-      if (ok) {
-        return {
-          cookieHeader: this.cachedCookie,
-          userAgent: this.getEffectiveUserAgent(),
-        };
-      }
+  async openLogin(): Promise<BrowserAuthStatus> {
+    const context = await this.getContext();
+    const page = await this.getOrCreatePage(context);
+    await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    await page.bringToFront();
+    this.lastValidatedAt = 0;
+
+    const status = await this.getStatus(false);
+    if (status.authenticated) {
+      return {
+        ...status,
+        browserOpened: true,
+        message: 'Jira browser session is authenticated and ready.',
+      };
     }
 
-    if (!forceInteractive) {
-      try {
-        const headlessSession = await this.captureFromBrowser(true);
-        if (
-          headlessSession.cookieHeader &&
-          (await this.verifyCookie(headlessSession.cookieHeader, headlessSession.userAgent))
-        ) {
-          this.cachedCookie = headlessSession.cookieHeader;
-          this.cachedUserAgent = headlessSession.userAgent;
-          this.saveCachedSession(headlessSession.cookieHeader, headlessSession.userAgent);
-          return {
-            cookieHeader: headlessSession.cookieHeader,
-            userAgent: this.getEffectiveUserAgent(),
-          };
-        }
-      } catch {
-        // Fall through to interactive browser login
-      }
-    }
-
-    const interactiveSession = await this.captureFromBrowser(false);
-    this.cachedCookie = interactiveSession.cookieHeader;
-    this.cachedUserAgent = interactiveSession.userAgent;
-    this.saveCachedSession(interactiveSession.cookieHeader, interactiveSession.userAgent);
     return {
-      cookieHeader: interactiveSession.cookieHeader,
-      userAgent: this.getEffectiveUserAgent(),
+      ...status,
+      browserOpened: true,
+      message: 'Browser opened. Complete Jira/SSO sign-in, then call jira_browser_auth_status or retry the Jira request.',
     };
   }
 
-  private async captureFromBrowser(
-    headless: boolean
-  ): Promise<{ cookieHeader: string; userAgent?: string }> {
-    mkdirSync(this.profileDir, { recursive: true });
-    const executablePath = resolveBrowserExecutable(this.browserChannel);
-    const port = await getFreePort();
-
-    const args = [
-      `--user-data-dir=${this.profileDir}`,
-      `--remote-debugging-port=${port}`,
-      '--no-first-run',
-      '--no-default-browser-check',
-    ];
-
-    if (this.configuredUserAgent) {
-      args.push(`--user-agent=${this.configuredUserAgent}`);
+  async getStatus(useCache = true): Promise<BrowserAuthStatus> {
+    const context = await this.getContext();
+    const now = Date.now();
+    if (useCache && this.lastValidatedAt > 0 && now - this.lastValidatedAt < this.validationTtlMs) {
+      return {
+        authenticated: true,
+        browserOpened: true,
+        profileDir: this.profileDir,
+        message: 'Jira browser session was recently validated.',
+      };
     }
-
-    if (headless) {
-      args.push('--headless=new');
-    }
-
-    args.push(this.baseUrl);
-
-    const proc: ChildProcess = spawn(executablePath, args, {
-      stdio: 'ignore',
-      detached: false,
-    });
-
-    const cleanup = () => {
-      try {
-        if (!proc.killed) {
-          proc.kill('SIGTERM');
-        }
-      } catch {}
-    };
 
     try {
-      const deadline = Date.now() + (headless ? 12_000 : this.loginTimeoutMs);
-
-      while (Date.now() < deadline) {
-        if (proc.exitCode !== null) {
-          throw new Error('Browser process exited before SSO session was established');
-        }
-
-        try {
-          const { cookieHeader, userAgent } = await fetchDebuggerCookies(port, this.baseUrl);
-          if (cookieHeader) {
-            const valid = await this.verifyCookie(cookieHeader, userAgent);
-            if (valid) {
-              return { cookieHeader, userAgent };
-            }
-          }
-        } catch {
-          // Browser debugger not ready yet or user still completing SSO
-        }
-
-        if (headless) {
-          await sleep(1000);
-        } else {
-          await sleep(2000);
-        }
+      const response = await context.request.get(`${this.baseUrl}/rest/api/2/myself`, {
+        headers: {
+          Accept: 'application/json',
+          ...(this.userAgent ? { 'User-Agent': this.userAgent } : {}),
+        },
+        timeout: 20_000,
+      });
+      const contentType = response.headers()['content-type'] || '';
+      const authenticated = response.ok() && contentType.toLowerCase().includes('application/json');
+      if (authenticated) {
+        this.lastValidatedAt = now;
+      } else {
+        this.lastValidatedAt = 0;
       }
 
-      throw new Error(
-        headless
-          ? 'Headless profile check did not find an active SSO session'
-          : `Timed out waiting for SSO login in browser at ${this.baseUrl}`
-      );
-    } finally {
-      cleanup();
+      return {
+        authenticated,
+        browserOpened: true,
+        profileDir: this.profileDir,
+        statusCode: response.status(),
+        message: authenticated
+          ? 'Jira browser session is authenticated.'
+          : 'Jira browser session requires sign-in.',
+      };
+    } catch (error) {
+      this.lastValidatedAt = 0;
+      return {
+        authenticated: false,
+        browserOpened: true,
+        profileDir: this.profileDir,
+        message: `Could not validate Jira browser session: ${error instanceof Error ? error.message : String(error)}`,
+      };
     }
+  }
+
+  async close(): Promise<void> {
+    const contextPromise = this.contextPromise;
+    this.contextPromise = null;
+    this.lastValidatedAt = 0;
+    if (contextPromise) {
+      const context = await contextPromise;
+      await context.close();
+    }
+  }
+
+  private async getContext(): Promise<BrowserContext> {
+    if (this.contextPromise) {
+      const existingContext = await this.contextPromise;
+      if (existingContext.browser()?.isConnected()) {
+        return existingContext;
+      }
+      this.contextPromise = null;
+      this.lastValidatedAt = 0;
+    }
+
+    if (!this.contextPromise) {
+      this.contextPromise = chromium.launchPersistentContext(this.profileDir, {
+        channel: this.channel,
+        headless: this.headless,
+        userAgent: this.userAgent,
+        viewport: null,
+        args: ['--no-first-run'],
+      }).catch((error) => {
+        this.contextPromise = null;
+        throw error;
+      });
+    }
+
+    return await this.contextPromise;
+  }
+
+  private async getOrCreatePage(context: BrowserContext): Promise<Page> {
+    const pages = context.pages();
+    return pages[0] || context.newPage();
   }
 }

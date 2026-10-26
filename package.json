@@ -1,6 +1,6 @@
 {
   "name": "@apo100l/mcp-jira-server",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "MCP server for self-hosted Jira with PAT and browser cookie authentication",
   "type": "module",
   "main": "build/index.js",
@@ -39,7 +39,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "axios": "^1.20.0"
+    "axios": "^1.20.0",
+    "playwright-core": "^1.63.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

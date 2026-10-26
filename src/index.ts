@@ -9,23 +9,26 @@ import {
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { JiraClient, CreateIssueInput, UpdateIssueInput } from './jira-client.js';
+import { BrowserAuthProvider } from './browser-auth.js';
 
 // Environment variables
 const JIRA_BASE_URL = process.env.JIRA_BASE_URL;
 const JIRA_PAT = process.env.JIRA_PAT;
 const JIRA_COOKIE = process.env.JIRA_COOKIE;
 const JIRA_USER_AGENT = process.env.JIRA_USER_AGENT;
+const JIRA_AUTH_MODE = process.env.JIRA_AUTH_MODE?.toLowerCase();
 
 // Function to check if environment variables are configured
 function checkEnvironmentConfig(): { isConfigured: boolean; error?: string } {
   const JIRA_BASE_URL = process.env.JIRA_BASE_URL;
   const JIRA_PAT = process.env.JIRA_PAT;
   const JIRA_COOKIE = process.env.JIRA_COOKIE;
+  const JIRA_AUTH_MODE = process.env.JIRA_AUTH_MODE?.toLowerCase();
   
-  if (!JIRA_BASE_URL || (!JIRA_PAT && !JIRA_COOKIE)) {
+  if (!JIRA_BASE_URL || (JIRA_AUTH_MODE !== 'browser' && !JIRA_PAT && !JIRA_COOKIE)) {
     return {
       isConfigured: false,
-      error: 'JIRA_BASE_URL and either JIRA_COOKIE or JIRA_PAT are required. Please configure them before using Jira functionality.'
+      error: 'JIRA_BASE_URL and an authentication method are required. Set JIRA_AUTH_MODE=browser, JIRA_COOKIE, or JIRA_PAT.'
     };
   }
   return { isConfigured: true };
@@ -33,6 +36,27 @@ function checkEnvironmentConfig(): { isConfigured: boolean; error?: string } {
 
 // Initialize Jira client (will be created on demand)
 let jiraClient: JiraClient | null = null;
+let browserAuthProvider: BrowserAuthProvider | null = null;
+
+function getBrowserAuthProvider(): BrowserAuthProvider {
+  if (process.env.JIRA_AUTH_MODE?.toLowerCase() !== 'browser') {
+    throw new Error('Browser authentication is not enabled. Set JIRA_AUTH_MODE=browser and restart the MCP client.');
+  }
+
+  if (!browserAuthProvider) {
+    const validationTtlSeconds = Number(process.env.JIRA_BROWSER_VALIDATION_TTL_SECONDS || '60');
+    browserAuthProvider = new BrowserAuthProvider({
+      baseUrl: process.env.JIRA_BASE_URL!,
+      profileDir: process.env.JIRA_BROWSER_PROFILE,
+      channel: process.env.JIRA_BROWSER_CHANNEL || 'chrome',
+      headless: process.env.JIRA_BROWSER_HEADLESS?.toLowerCase() === 'true',
+      userAgent: process.env.JIRA_USER_AGENT,
+      validationTtlMs: Number.isFinite(validationTtlSeconds) ? validationTtlSeconds * 1000 : 60_000,
+    });
+  }
+
+  return browserAuthProvider;
+}
 
 function getJiraClient(): JiraClient {
   const config = checkEnvironmentConfig();
@@ -45,11 +69,13 @@ function getJiraClient(): JiraClient {
     const JIRA_PAT = process.env.JIRA_PAT;
     const JIRA_COOKIE = process.env.JIRA_COOKIE;
     const JIRA_USER_AGENT = process.env.JIRA_USER_AGENT;
+    const useBrowserAuth = process.env.JIRA_AUTH_MODE?.toLowerCase() === 'browser';
     
     jiraClient = new JiraClient({
       baseUrl: JIRA_BASE_URL,
       personalAccessToken: JIRA_PAT,
       sessionCookie: JIRA_COOKIE,
+      cookieProvider: useBrowserAuth ? getBrowserAuthProvider() : undefined,
       userAgent: JIRA_USER_AGENT,
     });
   }
@@ -59,6 +85,22 @@ function getJiraClient(): JiraClient {
 
 // Define tools
 const tools: Tool[] = [
+  {
+    name: 'jira_browser_login',
+    description: 'Open the persistent Jira browser profile for SSO sign-in',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'jira_browser_auth_status',
+    description: 'Check whether the persistent browser profile is authenticated in Jira',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
   {
     name: 'jira_get_issue',
     description: 'Get details of a specific Jira issue by its key (e.g., PROJ-123)',
@@ -327,6 +369,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args = {} } = request.params;
 
     switch (name) {
+      case 'jira_browser_login': {
+        const status = await getBrowserAuthProvider().openLogin();
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(status, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'jira_browser_auth_status': {
+        const status = await getBrowserAuthProvider().getStatus(false);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(status, null, 2),
+            },
+          ],
+        };
+      }
+
       case 'jira_get_issue': {
         const issue = await getJiraClient().getIssue(args.issueKey as string);
         return {
@@ -522,9 +588,17 @@ async function main() {
   if (config.isConfigured) {
     console.error('Jira MCP Server running on stdio (configured)');
   } else {
-    console.error('Jira MCP Server running on stdio (not configured - JIRA_BASE_URL and either JIRA_COOKIE or JIRA_PAT required)');
+    console.error('Jira MCP Server running on stdio (not configured - set JIRA_BASE_URL and JIRA_AUTH_MODE=browser, JIRA_COOKIE, or JIRA_PAT)');
   }
 }
+
+async function shutdown() {
+  await browserAuthProvider?.close();
+  process.exit(0);
+}
+
+process.once('SIGINT', () => void shutdown());
+process.once('SIGTERM', () => void shutdown());
 
 main().catch((error) => {
   console.error('Fatal error:', error);
