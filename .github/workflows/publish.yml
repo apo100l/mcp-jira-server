@@ -37,8 +37,9 @@ jobs:
       - name: Check whether version is already published
         id: registry
         run: |
-          package_path=$(node -p "encodeURIComponent(process.env.npm_package_name)")
-          if curl --fail --silent "https://registry.npmjs.org/${package_path}/${npm_package_version}" >/dev/null; then
+          package_path=$(node -p "encodeURIComponent(require('./package.json').name)")
+          package_version=$(node -p "require('./package.json').version")
+          if curl --fail --silent "https://registry.npmjs.org/${package_path}/${package_version}" >/dev/null; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
