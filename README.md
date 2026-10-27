@@ -63,6 +63,7 @@ npm run build
 | `JIRA_BROWSER_CHANNEL` | Нет | Канал Playwright; по умолчанию `chrome` |
 | `JIRA_BROWSER_HEADLESS` | Нет | `true` для фонового Chrome после первоначального входа; по умолчанию `false` |
 | `JIRA_BROWSER_VALIDATION_TTL_SECONDS` | Нет | Период повторной проверки Jira-сессии; по умолчанию 60 секунд |
+| `JIRA_BROWSER_LOGIN_URL` | Нет | Страница входа для `jira_browser_login`; по умолчанию `<JIRA_BASE_URL>/login.jsp` |
 | `JIRA_COOKIE` | Один из способов авторизации | Полное значение HTTP-заголовка `Cookie` из авторизованной браузерной сессии |
 | `JIRA_PAT` | Один из способов авторизации | Personal Access Token; используется, только если `JIRA_COOKIE` не задан |
 | `JIRA_USER_AGENT` | Нет | Пользовательский `User-Agent`, если reverse proxy или SSO фильтрует запросы |

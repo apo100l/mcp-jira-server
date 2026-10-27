@@ -9,6 +9,7 @@ import {
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { JiraClient, CreateIssueInput, UpdateIssueInput } from './jira-client.js';
+import { compactIssue, compactProject } from './formatters.js';
 import { BrowserAuthProvider } from './browser-auth.js';
 
 // Environment variables
@@ -47,6 +48,7 @@ function getBrowserAuthProvider(): BrowserAuthProvider {
     const validationTtlSeconds = Number(process.env.JIRA_BROWSER_VALIDATION_TTL_SECONDS || '60');
     browserAuthProvider = new BrowserAuthProvider({
       baseUrl: process.env.JIRA_BASE_URL!,
+      loginUrl: process.env.JIRA_BROWSER_LOGIN_URL,
       profileDir: process.env.JIRA_BROWSER_PROFILE,
       channel: process.env.JIRA_BROWSER_CHANNEL || 'chrome',
       headless: process.env.JIRA_BROWSER_HEADLESS?.toLowerCase() === 'true',
@@ -129,6 +131,11 @@ const tools: Tool[] = [
           type: 'number',
           description: 'Maximum number of results to return (default: 50)',
           default: 50,
+        },
+        includeDescription: {
+          type: 'boolean',
+          description: 'Include issue descriptions in the results (default: false)',
+          default: false,
         },
       },
       required: ['jql'],
@@ -267,10 +274,15 @@ const tools: Tool[] = [
   },
   {
     name: 'jira_get_projects',
-    description: 'List all available Jira projects',
+    description: 'List available Jira projects (key, name, type). Optionally filter by a substring of the key or name.',
     inputSchema: {
       type: 'object',
-      properties: {},
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Case-insensitive substring to match against project key or name',
+        },
+      },
     },
   },
   {
@@ -410,11 +422,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           args.jql as string,
           args.maxResults as number
         );
+        const includeDescription = args.includeDescription === true;
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(issues, null, 2),
+              text: JSON.stringify(issues.map((issue) => compactIssue(issue, includeDescription)), null, 2),
             },
           ],
         };
@@ -493,11 +506,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'jira_get_projects': {
         const projects = await getJiraClient().getProjects();
+        const query = typeof args.query === 'string' ? args.query.trim().toLowerCase() : '';
+        const filtered = query
+          ? projects.filter((project) => `${project.key} ${project.name}`.toLowerCase().includes(query))
+          : projects;
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(projects, null, 2),
+              text: JSON.stringify(filtered.map(compactProject), null, 2),
             },
           ],
         };

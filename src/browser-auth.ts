@@ -4,6 +4,7 @@ import { chromium, BrowserContext, Page } from 'playwright-core';
 
 export interface BrowserAuthConfig {
   baseUrl: string;
+  loginUrl?: string;
   profileDir?: string;
   channel?: string;
   headless?: boolean;
@@ -30,6 +31,7 @@ export class BrowserAuthProvider {
   readonly profileDir: string;
 
   private readonly baseUrl: string;
+  private readonly loginUrl: string;
   private readonly channel: string;
   private readonly headless: boolean;
   private readonly userAgent?: string;
@@ -39,6 +41,8 @@ export class BrowserAuthProvider {
 
   constructor(config: BrowserAuthConfig) {
     this.baseUrl = config.baseUrl.replace(/\/$/, '');
+    // Jira root may answer 401 without redirecting to SSO; /login.jsp starts the SSO flow.
+    this.loginUrl = config.loginUrl || `${this.baseUrl}/login.jsp`;
     this.profileDir = config.profileDir || join(homedir(), '.mcp-jira-server', 'chrome-profile');
     this.channel = config.channel || 'chrome';
     this.headless = config.headless ?? false;
@@ -69,7 +73,7 @@ export class BrowserAuthProvider {
   async openLogin(): Promise<BrowserAuthStatus> {
     const context = await this.getContext();
     const page = await this.getOrCreatePage(context);
-    await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    await page.goto(this.loginUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     await page.bringToFront();
     this.lastValidatedAt = 0;
 
