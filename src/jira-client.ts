@@ -98,6 +98,13 @@ export class JiraClient {
 
     if (config.userAgent) {
       headers['User-Agent'] = config.userAgent;
+      // With a browser-like User-Agent Jira treats the request as coming from a browser and runs its
+      // XSRF origin check on POST/PUT/DELETE: without a same-origin Origin or Referer it answers
+      // 403 "XSRF check failed" even with X-Atlassian-Token: no-check. GET requests are not checked,
+      // which is why reads work and writes fail.
+      const origin = new URL(config.baseUrl).origin;
+      headers['Origin'] = origin;
+      headers['Referer'] = `${origin}/`;
     }
 
     if (config.cookieProvider) {

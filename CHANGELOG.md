@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-11-17
+
+### Fixed
+
+- Запись в Jira (`jira_add_comment`, `jira_create_issue`, `jira_update_issue`, `jira_search_issues` и другие POST/PUT/DELETE) падала с 403 "XSRF check failed", если задан браузерный `JIRA_USER_AGENT`: Jira считала запрос браузерным и требовала same-origin `Origin`/`Referer`. Теперь при заданном `JIRA_USER_AGENT` они передаются с адресом `JIRA_BASE_URL`. Чтение не затрагивалось.
+
 ## [1.3.0] - 2026-10-27
 
 ### Added
@@ -40,7 +46,8 @@
 
 - MCP SDK и Axios обновлены до актуальных исправленных версий; `npm audit` не находит известных уязвимостей.
 
-[Unreleased]: https://github.com/apo100l/mcp-jira-server/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/apo100l/mcp-jira-server/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/apo100l/mcp-jira-server/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/apo100l/mcp-jira-server/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/apo100l/mcp-jira-server/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/apo100l/mcp-jira-server/releases/tag/v1.1.0
